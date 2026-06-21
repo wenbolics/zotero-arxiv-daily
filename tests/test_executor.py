@@ -199,11 +199,25 @@ def test_deduplicate_papers_filters_by_arxiv_id_and_title():
             abstract="",
             url="https://arxiv.org/abs/2501.00003v1",
         ),
+        Paper(
+            source="arxiv",
+            title="Unique ID Version 1",
+            authors=[],
+            abstract="",
+            url="https://arxiv.org/abs/2501.00004v1",
+        ),
+        Paper(
+            source="arxiv",
+            title="Unique ID Version 2",
+            authors=[],
+            abstract="",
+            url="https://arxiv.org/abs/2501.00004v2",
+        ),
     ]
 
     deduplicated = executor._deduplicate_papers(papers, corpus)
 
-    assert [paper.title for paper in deduplicated] == ["Unique Paper"]
+    assert [paper.title for paper in deduplicated] == ["Unique Paper", "Unique ID Version 1"]
 
 
 # ---------------------------------------------------------------------------
