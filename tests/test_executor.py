@@ -6,7 +6,7 @@ import pytest
 from omegaconf import OmegaConf
 
 from zotero_arxiv_daily.executor import Executor, normalize_path_patterns
-from zotero_arxiv_daily.protocol import CorpusPaper
+from zotero_arxiv_daily.protocol import CorpusPaper, Paper
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +141,69 @@ def test_fetch_zotero_corpus_paper_with_zero_collections(config, monkeypatch):
 
     assert len(corpus) == 1
     assert corpus[0].paths == []
+
+
+# ---------------------------------------------------------------------------
+# deduplication helpers
+# ---------------------------------------------------------------------------
+
+
+def test_extract_arxiv_id_supports_url_and_text():
+    assert Executor._extract_arxiv_id("https://arxiv.org/abs/2401.12345v2") == "2401.12345"
+    assert Executor._extract_arxiv_id("https://arxiv.org/pdf/2401.12345v2.pdf") == "2401.12345"
+    assert Executor._extract_arxiv_id("arXiv:2401.12345v2") == "2401.12345"
+
+
+def test_deduplicate_papers_filters_by_arxiv_id_and_title():
+    executor = Executor.__new__(Executor)
+    corpus = [
+        CorpusPaper(
+            title="A Corpus Paper",
+            abstract="",
+            added_date=datetime(2026, 1, 1),
+            paths=["https://arxiv.org/abs/2401.12345v2"],
+        ),
+        CorpusPaper(
+            title="Title Match Paper",
+            abstract="",
+            added_date=datetime(2026, 1, 2),
+            paths=[],
+        ),
+    ]
+    papers = [
+        Paper(
+            source="arxiv",
+            title="Different Title But Same ID",
+            authors=[],
+            abstract="",
+            url="https://arxiv.org/abs/2401.12345v1",
+        ),
+        Paper(
+            source="arxiv",
+            title="   title match paper   ",
+            authors=[],
+            abstract="",
+            url="https://arxiv.org/abs/2501.00001",
+        ),
+        Paper(
+            source="arxiv",
+            title="Unique Paper",
+            authors=[],
+            abstract="",
+            url="https://arxiv.org/abs/2501.00002v1",
+        ),
+        Paper(
+            source="arxiv",
+            title="Unique Paper",
+            authors=[],
+            abstract="",
+            url="https://arxiv.org/abs/2501.00003v1",
+        ),
+    ]
+
+    deduplicated = executor._deduplicate_papers(papers, corpus)
+
+    assert [paper.title for paper in deduplicated] == ["Unique Paper"]
 
 
 # ---------------------------------------------------------------------------
