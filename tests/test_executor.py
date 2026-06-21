@@ -218,6 +218,10 @@ def test_deduplicate_papers_filters_by_arxiv_id_and_title():
     deduplicated = executor._deduplicate_papers(papers, corpus)
 
     assert [paper.title for paper in deduplicated] == ["Unique Paper", "Unique ID Version 1"]
+    assert [paper.url for paper in deduplicated] == [
+        "https://arxiv.org/abs/2501.00002v1",
+        "https://arxiv.org/abs/2501.00004v1",
+    ]
 
 
 # ---------------------------------------------------------------------------

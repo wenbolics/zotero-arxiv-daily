@@ -13,8 +13,8 @@ from .utils import send_email
 from openai import OpenAI
 from tqdm import tqdm
 
-ARXIV_URL_PATTERN = re.compile(r"(?:https?://)?(?:www\.)?arxiv\.org/(?:abs|pdf)/([^?#]+)", flags=re.IGNORECASE)
-ARXIV_TEXT_PATTERN = re.compile(
+_ARXIV_URL_PATTERN = re.compile(r"(?:https?://)?(?:www\.)?arxiv\.org/(?:abs|pdf)/([^?#]+)", flags=re.IGNORECASE)
+_ARXIV_TEXT_PATTERN = re.compile(
     r"arxiv[:\s]+((?:\d{4}\.\d{4,5}|[a-z\-]+(?:\.[a-z\-]+)?/\d{7})(?:v\d+)?)",
     flags=re.IGNORECASE,
 )
@@ -101,11 +101,11 @@ class Executor:
         if not text:
             return None
 
-        if match := ARXIV_URL_PATTERN.search(text):
+        if match := _ARXIV_URL_PATTERN.search(text):
             arxiv_id = match.group(1).split(".pdf")[0].strip("/")
             return re.sub(r"v\d+$", "", arxiv_id.lower()) if arxiv_id else None
 
-        if match := ARXIV_TEXT_PATTERN.search(text):
+        if match := _ARXIV_TEXT_PATTERN.search(text):
             return re.sub(r"v\d+$", "", match.group(1).lower())
 
         return None
