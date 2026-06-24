@@ -13,6 +13,7 @@ from time import sleep
 from typing import Any, Callable, TypeVar
 from loguru import logger
 import requests
+import random  # <-- 新增：用于生成随机抖动（Jitter）
 
 T = TypeVar("T")
 
@@ -114,7 +115,7 @@ class ArxivRetriever(BaseRetriever):
             raise ValueError("category must be specified for arxiv.")
 
     def _retrieve_raw_papers(self) -> list[ArxivResult]:
-        client = arxiv.Client(num_retries=10, delay_seconds=10)
+        client = arxiv.Client(num_retries=3, delay_seconds=5)  # <-- 修改：适当调小内置重试，主要靠外层代码控制
         query = '+'.join(self.config.source.arxiv.category)
         include_cross_list = self.config.source.arxiv.get("include_cross_list", False)
         # Get the latest paper from arxiv rss feed
@@ -133,25 +134,46 @@ class ArxivRetriever(BaseRetriever):
 
         # Get full information of each paper from arxiv api
         bar = tqdm(total=len(all_paper_ids))
-        max_batch_retries = 5
+        batch_size = 10         # <-- 修改：每批请求数量从 20 降到 10
+        max_batch_retries = 8   # <-- 修改：最大重试次数从 5 增加到 8
         batch_retry_delay = 30
-        for i in range(0, len(all_paper_ids), 20):
-            search = arxiv.Search(id_list=all_paper_ids[i:i + 20])
+        
+        for i in range(0, len(all_paper_ids), batch_size):
+            search = arxiv.Search(id_list=all_paper_ids[i:i + batch_size])
+            batch_ok = False    # <-- 新增：用于标记当前批次是否成功获取
+            
             for attempt in range(max_batch_retries):
                 try:
                     batch = list(client.results(search))
                     bar.update(len(batch))
                     raw_papers.extend(batch)
+                    batch_ok = True
                     break
                 except arxiv.HTTPError as exc:
                     if exc.status == 429 and attempt < max_batch_retries - 1:
-                        wait = batch_retry_delay * (attempt + 1)
-                        logger.warning(f"arXiv API 429 on batch {i // 20}, retry {attempt + 1}/{max_batch_retries} in {wait}s")
+                        # <-- 修改：计算指数退避时间，并加入 0~5 秒的随机抖动
+                        wait = batch_retry_delay * (2 ** attempt) + random.uniform(0, 5)
+                        logger.warning(
+                            f"arXiv API 429 on batch {i // batch_size}, "
+                            f"retry {attempt + 1}/{max_batch_retries} in {wait:.1f}s"
+                        )
                         sleep(wait)
                     else:
-                        raise
-            if i + 20 < len(all_paper_ids):
-                sleep(3)
+                        # <-- 修改：不再直接 raise 崩溃，而是打印错误并跳出循环，选择降级跳过
+                        logger.error(
+                            f"Failed batch {i // batch_size} after retries "
+                            f"(status={getattr(exc, 'status', None)}), skipping this batch."
+                        )
+                        break
+            
+            # 如果这一批重试完依然失败，直接跳过处理下一批
+            if not batch_ok:
+                continue
+                
+            # <-- 修改：两批成功请求之间的基础休息时间由 3 秒延长到 6 秒
+            if i + batch_size < len(all_paper_ids):
+                sleep(6)
+                
         bar.close()
 
         return raw_papers
