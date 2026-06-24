@@ -1,9 +1,10 @@
 from loguru import logger
 from pyzotero import zotero
 from omegaconf import DictConfig, ListConfig
+import re
 from .utils import glob_match
 from .retriever import get_retriever_cls
-from .protocol import CorpusPaper
+from .protocol import CorpusPaper, Paper
 import random
 from datetime import datetime
 from .reranker import get_reranker_cls
@@ -11,6 +12,12 @@ from .construct_email import render_email
 from .utils import send_email
 from openai import OpenAI
 from tqdm import tqdm
+
+_ARXIV_URL_PATTERN = re.compile(r"(?:https?://)?(?:www\.)?arxiv\.org/(?:abs|pdf)/([^?#]+)", flags=re.IGNORECASE)
+_ARXIV_TEXT_PATTERN = re.compile(
+    r"arxiv[:\s]+((?:\d{4}\.\d{4,5}|[a-z\-]+(?:\.[a-z\-]+)?/\d{7})(?:v\d+)?)",
+    flags=re.IGNORECASE,
+)
 
 
 def normalize_path_patterns(patterns: list[str] | ListConfig | None, config_key: str) -> list[str] | None:
@@ -89,6 +96,53 @@ class Executor:
             logger.info(f"Selected {len(corpus)} zotero papers:\n{samples}\n...")
         return corpus
 
+    @staticmethod
+    def _extract_arxiv_id(text: str | None) -> str | None:
+        if not text:
+            return None
+
+        if match := _ARXIV_URL_PATTERN.search(text):
+            arxiv_id = match.group(1).split(".pdf")[0].strip("/")
+            return re.sub(r"v\d+$", "", arxiv_id.lower()) if arxiv_id else None
+
+        if match := _ARXIV_TEXT_PATTERN.search(text):
+            return re.sub(r"v\d+$", "", match.group(1).lower())
+
+        return None
+
+    @staticmethod
+    def _normalize_title(title: str) -> str:
+        return " ".join(title.lower().split())
+
+    def _deduplicate_papers(self, papers: list[Paper], corpus: list[CorpusPaper]) -> list[Paper]:
+        corpus_titles = {self._normalize_title(c.title) for c in corpus if c.title}
+        corpus_arxiv_ids = set()
+        for corpus_paper in corpus:
+            if arxiv_id := self._extract_arxiv_id(corpus_paper.title):
+                corpus_arxiv_ids.add(arxiv_id)
+            for path in corpus_paper.paths:
+                if arxiv_id := self._extract_arxiv_id(path):
+                    corpus_arxiv_ids.add(arxiv_id)
+
+        unique_papers = []
+        seen_titles = set()
+        seen_arxiv_ids = set()
+        for paper in papers:
+            normalized_title = self._normalize_title(paper.title)
+            arxiv_id = self._extract_arxiv_id(paper.url)
+
+            if normalized_title in corpus_titles or normalized_title in seen_titles:
+                continue
+            if arxiv_id and (arxiv_id in corpus_arxiv_ids or arxiv_id in seen_arxiv_ids):
+                continue
+
+            unique_papers.append(paper)
+            seen_titles.add(normalized_title)
+            if arxiv_id:
+                seen_arxiv_ids.add(arxiv_id)
+
+        return unique_papers
+
     
     def run(self):
         corpus = self.fetch_zotero_corpus()
@@ -106,10 +160,14 @@ class Executor:
             logger.info(f"Retrieved {len(papers)} {source} papers")
             all_papers.extend(papers)
         logger.info(f"Total {len(all_papers)} papers retrieved from all sources")
+        unique_papers = self._deduplicate_papers(all_papers, corpus)
+        duplicate_count = len(all_papers) - len(unique_papers)
+        logger.info(f"Filtered {duplicate_count} duplicate papers")
+        logger.info(f"Total {len(unique_papers)} unique papers to process")
         reranked_papers = []
-        if len(all_papers) > 0:
+        if len(unique_papers) > 0:
             logger.info("Reranking papers...")
-            reranked_papers = self.reranker.rerank(all_papers, corpus)
+            reranked_papers = self.reranker.rerank(unique_papers, corpus)
             reranked_papers = reranked_papers[:self.config.executor.max_paper_num]
             logger.info("Generating TLDR and affiliations...")
             for p in tqdm(reranked_papers):
